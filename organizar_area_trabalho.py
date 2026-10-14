@@ -15,7 +15,9 @@ SEGURANÇA:
 - Só remove pastas que ficarem vazias. Nunca apaga arquivos.
 - Cria um registro CSV de origem/destino e um log de execução.
 
-Uso: python organizar_area_trabalho.py
+Uso:
+  python organizar_area_trabalho.py
+  python organizar_area_trabalho.py "C:/Caminho/Da/Pasta"
 """
 
 from pathlib import Path
@@ -25,6 +27,7 @@ import os
 import re
 import shutil
 import sys
+import argparse
 
 def encontrar_area_de_trabalho():
     """Localiza a Área de Trabalho do Windows, inclusive quando redirecionada."""
@@ -51,9 +54,10 @@ NOME_SCRIPT = Path(__file__).name
 NOME_RELATORIO_INVENTARIO = "folder_inventory.txt"
 NOME_LOG = "registro_organizacao.csv"
 
-# Pastas protegidas: não mover, renomear, esvaziar nem alterar seu conteúdo.
-# A comparação ignora maiúsculas, acentos e separadores comuns.
-TERMOS_PASTAS_PROTEGIDAS = ("lagora", "censo", "sistema presenca")
+# Proteções permanentes: nomes de pastas OU arquivos que contenham qualquer
+# destes termos são preservados. A comparação ignora caixa e acentos.
+# A proteção vale para qualquer componente do caminho dentro da pasta-alvo.
+TERMOS_PROTEGIDOS = ("lagora", "censo", "presenca")
 ARQUIVO_PROTEGIDO = "shutdown.bat"
 
 PASTA_DESTINO_GERAL = {
@@ -121,26 +125,39 @@ def caminho_relativo(caminho):
     except ValueError:
         return caminho
 
-def nome_pasta_protegida(nome):
-    """Identifica pastas protegidas sem diferenciar acentos ou caixa."""
+def nome_item_protegido(nome):
+    """True para nome que contenha lagora, censo ou presença/presenca."""
     nome_normalizado = texto_normalizado(nome).replace("_", " ").replace("-", " ")
     nome_normalizado = " ".join(nome_normalizado.split())
-    return any(termo in nome_normalizado for termo in TERMOS_PASTAS_PROTEGIDAS)
+    return any(termo in nome_normalizado for termo in TERMOS_PROTEGIDOS)
+
+def nome_pasta_protegida(nome):
+    """Mantido como função específica para filtrar diretórios na varredura."""
+    return nome_item_protegido(nome)
+
+def caminho_tem_item_protegido(caminho):
+    """Verifica componentes relativos à pasta-alvo, incluindo o próprio arquivo.
+
+    Não compara os diretórios ancestrais externos à pasta-alvo, para que, por
+    exemplo, um perfil do Windows com 'censo' no nome não proteja tudo por engano.
+    """
+    relativo = caminho_relativo(caminho)
+    return any(nome_item_protegido(parte) for parte in relativo.parts)
 
 def caminho_tem_pasta_protegida(caminho):
-    """Verifica somente componentes dentro da Área de Trabalho (não o perfil do Windows)."""
+    """True se algum diretório ancestral dentro da raiz estiver protegido."""
     relativo = caminho_relativo(caminho)
     partes = relativo.parts[:-1] if caminho.is_file() else relativo.parts
     return any(nome_pasta_protegida(parte) for parte in partes)
 
 def esta_protegido(caminho):
-    """Protege shutdown.bat e todos os itens dentro das pastas protegidas."""
+    """Protege shutdown.bat e qualquer item/caminho que mencione termos críticos."""
     return (caminho.name.casefold() == ARQUIVO_PROTEGIDO.casefold()
-            or caminho_tem_pasta_protegida(caminho))
+            or caminho_tem_item_protegido(caminho))
 
 def pasta_lagora_ou_ancestral(caminho):
-    """Mantém o nome histórico da função; agora cobre todas as pastas protegidas."""
-    return caminho_tem_pasta_protegida(caminho)
+    """Compatibilidade com chamadas antigas: protege qualquer termo crítico."""
+    return caminho_tem_item_protegido(caminho)
 
 def ano_no_texto(texto):
     encontrados = re.findall(r"(?<!\d)(20\d{2}|19\d{2})(?!\d)", texto)
@@ -264,44 +281,71 @@ def descobrir_arquivos():
     return sorted(arquivos, key=lambda p: str(p).casefold())
 
 def pastas_protegidas_ou_com_protegidos():
-    """Retorna pastas que precisam permanecer para preservar shutdown.bat."""
-    manter = set()
+    """Pastas que devem ficar: protegidas, com itens protegidos ou ancestrais deles."""
+    manter = {RAIZ}
+
+    def marcar_ancestrais(caminho):
+        pai = caminho if caminho.is_dir() else caminho.parent
+        while pai == RAIZ or RAIZ in pai.parents:
+            manter.add(pai)
+            if pai == RAIZ:
+                break
+            pai = pai.parent
+
     for atual, diretorios, nomes in os.walk(RAIZ, topdown=True):
         atual_path = Path(atual)
-        diretorios[:] = [
-            d for d in diretorios
-            if not (atual_path / d).is_symlink()
-            and not nome_pasta_protegida(d)
-        ]
+        # Diretórios protegidos são preservados integralmente, inclusive subpastas vazias.
+        protegidos = [d for d in diretorios if nome_pasta_protegida(d)]
+        for nome in protegidos:
+            pasta = atual_path / nome
+            marcar_ancestrais(pasta)
+            for raiz_protegida, subpastas, _ in os.walk(pasta, topdown=True):
+                raiz_path = Path(raiz_protegida)
+                manter.add(raiz_path)
+                subpastas[:] = [sub for sub in subpastas
+                                if not (raiz_path / sub).is_symlink()]
+                manter.update(raiz_path / sub for sub in subpastas)
+        diretorios[:] = [d for d in diretorios
+                         if not (atual_path / d).is_symlink()
+                         and d not in protegidos]
+
         for nome in nomes:
-            if nome.casefold() == ARQUIVO_PROTEGIDO.casefold():
-                caminho = atual_path / nome
-                pai = caminho.parent
-                while pai != RAIZ and RAIZ in pai.parents:
-                    manter.add(pai)
-                    pai = pai.parent
-    # Preserva as pastas lagora e tudo o que estiver dentro delas.
-    for atual, diretorios, _ in os.walk(RAIZ, topdown=True):
-        atual_path = Path(atual)
-        for d in list(diretorios):
-            if nome_pasta_protegida(d):
-                pasta = atual_path / d
-                # Preserva a pasta e todas as subpastas, inclusive as vazias.
-                for raiz_protegida, subpastas, _ in os.walk(pasta, topdown=True):
-                    raiz_protegida_path = Path(raiz_protegida)
-                    manter.add(raiz_protegida_path)
-                    subpastas[:] = [
-                        sub for sub in subpastas
-                        if not (raiz_protegida_path / sub).is_symlink()
-                    ]
-                pai = pasta.parent
-                while pai != RAIZ and RAIZ in pai.parents:
-                    manter.add(pai)
-                    pai = pai.parent
-                diretorios.remove(d)
+            arquivo = atual_path / nome
+            if arquivo.name.casefold() == ARQUIVO_PROTEGIDO.casefold() or nome_item_protegido(nome):
+                marcar_ancestrais(arquivo)
+
     return manter
 
 def main():
+    global RAIZ
+    parser = argparse.ArgumentParser(
+        description="Organiza arquivos em uma pasta escolhida, mantendo os itens críticos protegidos."
+    )
+    parser.add_argument(
+        "pasta", nargs="?",
+        help="pasta a organizar (se omitida, você pode informar uma ou usar a Área de Trabalho)"
+    )
+    args = parser.parse_args()
+
+    if args.pasta:
+        candidata = Path(args.pasta).expanduser()
+    else:
+        padrao = encontrar_area_de_trabalho()
+        digitado = input(
+            f"\nPasta para organizar (Enter usa a Área de Trabalho: {padrao}): "
+        ).strip().strip('"')
+        candidata = Path(digitado).expanduser() if digitado else padrao
+
+    try:
+        candidata = candidata.resolve(strict=True)
+    except (OSError, RuntimeError):
+        print(f"Erro: a pasta não existe ou não pode ser acessada: {candidata}")
+        return
+    if not candidata.is_dir():
+        print(f"Erro: o caminho informado não é uma pasta: {candidata}")
+        return
+    RAIZ = candidata
+
     print("=" * 68)
     print("ORGANIZADOR DA ÁREA DE TRABALHO")
     print("=" * 68)
@@ -309,7 +353,7 @@ def main():
     if Path(__file__).resolve().parent != RAIZ:
         print(f"Observação: o script está em {Path(__file__).resolve().parent}")
     print("Modo inicial: SIMULAÇÃO — nenhum arquivo será movido ainda.")
-    print("Proteções: pastas com 'lagora', 'censo' ou 'sistema presença', e todos os shutdown.bat.")
+    print("Proteções: qualquer item/caminho com 'lagora', 'censo', 'presença' ou 'presenca', e todos os shutdown.bat.")
     print()
 
     arquivos = descobrir_arquivos()
@@ -330,7 +374,7 @@ def main():
     if len(plano) > 35:
         print(f"  ... e mais {len(plano) - 35} arquivos.")
     print()
-    print("As pastas protegidas ('lagora', 'censo', 'sistema presença') e todos os shutdown.bat ficam no lugar.")
+    print("Itens que mencionem 'lagora', 'censo', 'presença' ou 'presenca', e todos os shutdown.bat ficam no lugar.")
     print("Pastas só serão removidas se ficarem vazias.")
     print("Arquivos com nomes repetidos receberão sufixos (2), (3) etc.")
     print()
