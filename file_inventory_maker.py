@@ -1,16 +1,25 @@
-
 #!/usr/bin/env python3
 """
-Recursive Folder Inventory
---------------------------
-Creates folder_inventory.txt containing:
-- Complete recursive folder and file structure
-- Relative paths, file extensions, and sizes
-- Up to five lines of extracted text per file
-- Errors and notes for unsupported or unreadable files
+Recursive Folder Inventory (com OCR opcional)
+---------------------------------------------
+Cria folder_inventory.txt contendo:
+- Estrutura recursiva completa de pastas e arquivos
+- Caminhos relativos, extensões e tamanhos
+- Até 5 linhas de conteúdo por arquivo
+- OCR pt-BR para imagens e PDFs escaneados (via Tesseract)
+- Erros e observações para arquivos não suportados/ilegíveis
 
-Place this script in the folder you want to scan.
-Run: python inventory.py
+Dependências Python (instale só o que precisar):
+  pip install pymupdf python-docx openpyxl xlrd python-pptx odfpy
+  pip install pytesseract Pillow
+
+OCR também requer o binário Tesseract com pacote de português:
+  Windows: https://github.com/UB-Mannheim/tesseract/wiki
+  Linux:   sudo apt install tesseract-ocr tesseract-ocr-por
+  macOS:   brew install tesseract tesseract-lang
+
+Coloque este script na pasta que deseja escanear.
+Execute: python file_inventory_maker.py
 """
 
 from pathlib import Path
@@ -23,14 +32,18 @@ import zipfile
 import mimetypes
 import subprocess
 import shutil
-import re
+import io
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "folder_inventory.txt"
 MAX_LINES = 5
 MAX_FILE_SIZE_MB = 50
 
-# Extensions treated as plain text or source code
+# Quantas páginas de PDF tentar via OCR se não houver texto extraível
+PDF_OCR_MAX_PAGES = 5
+# DPI para rasterizar PDFs antes do OCR (200 costuma ser um bom equilíbrio)
+PDF_OCR_DPI = 200
+
 TEXT_EXTENSIONS = {
     ".txt", ".md", ".rst", ".log", ".ini", ".cfg", ".conf",
     ".toml", ".yaml", ".yml", ".xml", ".html", ".htm", ".css",
@@ -48,6 +61,12 @@ IMAGE_EXTENSIONS = {
     ".tif", ".tiff", ".ico", ".heic", ".svg"
 }
 
+# Extensões que tentamos OCR diretamente
+OCR_IMAGE_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+    ".tif", ".tiff", ".ico"
+}
+
 AUDIO_VIDEO_EXTENSIONS = {
     ".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac",
     ".mp4", ".mkv", ".avi", ".mov", ".webm", ".wmv"
@@ -58,18 +77,19 @@ ARCHIVE_EXTENSIONS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Utilitários de texto
+# ---------------------------------------------------------------------------
+
 def clean_text(value):
-    """Make extracted text suitable for a plain-text report."""
     value = str(value).replace("\x00", "")
     return value.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def first_lines(text, limit=MAX_LINES):
-    """Return the first non-empty-content lines, preserving blank lines."""
     text = clean_text(text)
     lines = text.split("\n")
 
-    # Remove excessive trailing blank lines, not meaningful interior lines.
     while lines and not lines[-1].strip():
         lines.pop()
 
@@ -84,8 +104,120 @@ def first_lines(text, limit=MAX_LINES):
     return "\n".join(result)
 
 
+# ---------------------------------------------------------------------------
+# OCR
+# ---------------------------------------------------------------------------
+
+def run_ocr(pil_image):
+    """Executa Tesseract em uma imagem PIL. Retorna (texto, erro)."""
+    try:
+        import pytesseract
+    except ImportError:
+        return None, "Install pytesseract and Pillow: pip install pytesseract Pillow"
+
+    # Tenta pt-BR primeiro; cai para inglês/default se faltar o pacote.
+    for lang in ("por+eng", "por", "eng"):
+        try:
+            text = pytesseract.image_to_string(pil_image, lang=lang)
+            if text and text.strip():
+                return text, None
+        except pytesseract.TesseractNotFoundError:
+            return None, (
+                "Tesseract binary not found. Install Tesseract OCR "
+                "(with Portuguese language pack) and add it to PATH."
+            )
+        except pytesseract.TesseractError:
+            # Normalmente idioma não instalado — tenta o próximo.
+            continue
+        except Exception as exc:
+            return None, f"OCR error: {exc}"
+
+    return None, "OCR found no text"
+
+
+def ocr_image_file(path):
+    """Abre uma imagem com Pillow e roda OCR."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None, "Install Pillow: pip install Pillow"
+
+    try:
+        with Image.open(path) as img:
+            # Converte para RGB (Tesseract prefere)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+
+            # Upscale se for pequena — ajuda bastante no OCR
+            if img.width < 1200:
+                scale = 1200 / img.width
+                img = img.resize(
+                    (int(img.width * scale), int(img.height * scale))
+                )
+
+            return run_ocr(img)
+    except Exception as exc:
+        return None, f"Image error: {exc}"
+
+
+def ocr_pdf(path, max_pages=PDF_OCR_MAX_PAGES, dpi=PDF_OCR_DPI):
+    """Rasteriza páginas do PDF com pymupdf e roda OCR."""
+    try:
+        import fitz  # pymupdf
+    except ImportError:
+        return None, "Install pymupdf: pip install pymupdf"
+
+    try:
+        from PIL import Image
+    except ImportError:
+        return None, "Install Pillow: pip install Pillow"
+
+    try:
+        doc = fitz.open(str(path))
+    except Exception as exc:
+        return None, f"PDF OCR error: {exc}"
+
+    parts = []
+    try:
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+
+        for page_index in range(min(len(doc), max_pages)):
+            page = doc[page_index]
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+
+            text, err = run_ocr(img)
+
+            if err and "Install" in err:
+                return None, err
+
+            if text and text.strip():
+                parts.append(f"[Page {page_index + 1} — OCR]\n{text}")
+
+        if not parts:
+            return None, "OCR found no text in scanned PDF"
+
+        if len(doc) > max_pages:
+            parts.append(
+                f"[OCR stopped after {max_pages} pages]"
+            )
+
+        return "\n".join(parts), None
+    except Exception as exc:
+        return None, f"PDF OCR error: {exc}"
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Extratores por formato
+# ---------------------------------------------------------------------------
+
 def read_text_file(path):
-    """Try common encodings for text-based files."""
     for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
         try:
             with path.open("r", encoding=encoding) as file:
@@ -97,37 +229,35 @@ def read_text_file(path):
 
 
 def extract_pdf(path):
+    """Extrai texto com pymupdf; cai para OCR se for escaneado."""
     try:
-        from pypdf import PdfReader
+        import fitz  # pymupdf
+    except ImportError:
+        return None, "Install pymupdf: pip install pymupdf"
 
-        reader = PdfReader(str(path))
-
-        if reader.is_encrypted:
-            try:
-                if reader.decrypt(""):
-                    pass
-                else:
-                    return None, "Encrypted PDF; password required"
-            except Exception:
-                return None, "Encrypted PDF; password required"
+    try:
+        doc = fitz.open(str(path))
 
         parts = []
-        for page_number, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
+        total_chars = 0
+
+        for page_number, page in enumerate(doc):
+            text = page.get_text() or ""
             if text.strip():
                 parts.append(f"[Page {page_number + 1}]\n{text}")
+                total_chars += len(text)
 
-            # Avoid extracting huge documents unnecessarily.
-            if len("\n".join(parts)) > 100_000:
+            if total_chars > 100_000:
                 break
 
-        if not parts:
-            return None, "No extractable text; possibly a scanned PDF"
+        doc.close()
 
-        return "\n".join(parts), None
+        if parts:
+            return "\n".join(parts), None
 
-    except ImportError:
-        return None, "Install pypdf to read PDFs"
+        # Sem texto: tenta OCR
+        return ocr_pdf(path)
+
     except Exception as exc:
         return None, f"PDF error: {exc}"
 
@@ -135,7 +265,10 @@ def extract_pdf(path):
 def extract_docx(path):
     try:
         from docx import Document
+    except ImportError:
+        return None, "Install python-docx: pip install python-docx"
 
+    try:
         document = Document(str(path))
         parts = []
 
@@ -147,10 +280,11 @@ def extract_docx(path):
             for row in table.rows:
                 parts.append(" | ".join(cell.text for cell in row.cells))
 
+        if not parts:
+            return None, "DOCX contained no text"
+
         return "\n".join(parts), None
 
-    except ImportError:
-        return None, "Install python-docx to read DOCX files"
     except Exception as exc:
         return None, f"DOCX error: {exc}"
 
@@ -158,11 +292,12 @@ def extract_docx(path):
 def extract_xlsx(path):
     try:
         from openpyxl import load_workbook
+    except ImportError:
+        return None, "Install openpyxl: pip install openpyxl"
 
+    try:
         workbook = load_workbook(
-            filename=str(path),
-            read_only=True,
-            data_only=True
+            filename=str(path), read_only=True, data_only=True
         )
         parts = []
 
@@ -171,10 +306,9 @@ def extract_xlsx(path):
 
             for row in sheet.iter_rows(values_only=True):
                 values = [
-                    str(value) if value is not None else ""
-                    for value in row
+                    str(value) if value is not None else "" for value in row
                 ]
-                if any(values):
+                if any(v for v in values if v):
                     parts.append(" | ".join(values))
 
                 if len(parts) > 1000:
@@ -185,10 +319,12 @@ def extract_xlsx(path):
                 break
 
         workbook.close()
+
+        if not parts:
+            return None, "Workbook is empty"
+
         return "\n".join(parts), None
 
-    except ImportError:
-        return None, "Install openpyxl to read XLSX files"
     except Exception as exc:
         return None, f"XLSX error: {exc}"
 
@@ -196,7 +332,10 @@ def extract_xlsx(path):
 def extract_xls(path):
     try:
         import xlrd
+    except ImportError:
+        return None, "Install xlrd: pip install xlrd"
 
+    try:
         workbook = xlrd.open_workbook(str(path), on_demand=True)
         parts = []
 
@@ -204,18 +343,17 @@ def extract_xls(path):
             parts.append(f"[Sheet: {sheet.name}]")
 
             for row_index in range(min(sheet.nrows, 1000)):
-                values = [
-                    str(value)
-                    for value in sheet.row_values(row_index)
-                ]
-                if any(values):
+                values = [str(v) for v in sheet.row_values(row_index)]
+                if any(v.strip() for v in values):
                     parts.append(" | ".join(values))
 
         workbook.release_resources()
+
+        if not parts:
+            return None, "Workbook is empty"
+
         return "\n".join(parts), None
 
-    except ImportError:
-        return None, "Install xlrd to read legacy XLS files"
     except Exception as exc:
         return None, f"XLS error: {exc}"
 
@@ -223,7 +361,10 @@ def extract_xls(path):
 def extract_pptx(path):
     try:
         from pptx import Presentation
+    except ImportError:
+        return None, "Install python-pptx: pip install python-pptx"
 
+    try:
         presentation = Presentation(str(path))
         parts = []
 
@@ -241,10 +382,11 @@ def extract_pptx(path):
                             " | ".join(cell.text for cell in row.cells)
                         )
 
+        if not parts:
+            return None, "Presentation has no text"
+
         return "\n".join(parts), None
 
-    except ImportError:
-        return None, "Install python-pptx to read PPTX files"
     except Exception as exc:
         return None, f"PPTX error: {exc}"
 
@@ -254,17 +396,17 @@ def extract_odt(path):
         from odf.opendocument import load
         from odf import text as odf_text
         from odf import teletype
+    except ImportError:
+        return None, "Install odfpy: pip install odfpy"
 
+    try:
         document = load(str(path))
         paragraphs = document.getElementsByType(odf_text.P)
-        parts = [
-            teletype.extractText(paragraph)
-            for paragraph in paragraphs
-        ]
+        parts = [teletype.extractText(p) for p in paragraphs]
+        if not parts:
+            return None, "ODT has no text"
         return "\n".join(parts), None
 
-    except ImportError:
-        return None, "Install odfpy to read ODT files"
     except Exception as exc:
         return None, f"ODT error: {exc}"
 
@@ -273,7 +415,10 @@ def extract_odp(path):
     try:
         from odf.opendocument import load
         from odf import draw, text as odf_text, teletype
+    except ImportError:
+        return None, "Install odfpy: pip install odfpy"
 
+    try:
         document = load(str(path))
         parts = []
 
@@ -282,16 +427,16 @@ def extract_odp(path):
             for paragraph in slide.getElementsByType(odf_text.P):
                 parts.append(teletype.extractText(paragraph))
 
+        if not parts:
+            return None, "ODP has no text"
         return "\n".join(parts), None
 
-    except ImportError:
-        return None, "Install odfpy to read ODP files"
     except Exception as exc:
         return None, f"ODP error: {exc}"
 
 
 def extract_doc(path):
-    """Read older Microsoft Word DOC files if antiword is installed."""
+    """DOC legado via antiword, se disponível."""
     executable = shutil.which("antiword")
 
     if executable:
@@ -301,7 +446,7 @@ def extract_doc(path):
                 capture_output=True,
                 text=True,
                 timeout=20,
-                errors="replace"
+                errors="replace",
             )
             if result.returncode == 0:
                 return result.stdout, None
@@ -309,13 +454,37 @@ def extract_doc(path):
         except Exception as exc:
             return None, f"DOC error: {exc}"
 
-    return None, (
-        "Legacy DOC format: install antiword or convert to DOCX"
-    )
+    return None, "Legacy DOC: install antiword or convert to DOCX"
 
+
+def extract_ods(path):
+    try:
+        from xml.etree import ElementTree as ET
+
+        with zipfile.ZipFile(path) as archive:
+            xml = archive.read("content.xml")
+
+        root = ET.fromstring(xml)
+        rows = []
+        for element in root.iter():
+            if element.tag.endswith("}table-row"):
+                cells = "".join(element.itertext())
+                if cells.strip():
+                    rows.append(cells)
+
+        if not rows:
+            return None, "ODS has no text"
+        return "\n".join(rows), None
+
+    except Exception as exc:
+        return None, f"ODS error: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Roteador
+# ---------------------------------------------------------------------------
 
 def extract_content(path):
-    """Select an extractor based on file extension."""
     ext = path.suffix.lower()
     name = path.name.lower()
 
@@ -327,11 +496,12 @@ def extract_content(path):
     if ext == ".csv":
         try:
             with path.open(
-                "r", encoding="utf-8-sig", errors="replace",
-                newline=""
+                "r", encoding="utf-8-sig", errors="replace", newline=""
             ) as file:
                 rows = list(csv.reader(file))
-            return "\n".join(" | ".join(row) for row in rows[:1000]), None
+            if not rows:
+                return None, "Empty CSV"
+            return "\n".join(" | ".join(r) for r in rows[:1000]), None
         except Exception as exc:
             return None, f"CSV error: {exc}"
 
@@ -347,7 +517,7 @@ def extract_content(path):
     if ext == ".doc":
         return extract_doc(path)
 
-    if ext == ".xlsx" or ext == ".xlsm":
+    if ext in {".xlsx", ".xlsm"}:
         return extract_xlsx(path)
 
     if ext == ".xls":
@@ -363,28 +533,19 @@ def extract_content(path):
         return extract_odp(path)
 
     if ext == ".ods":
-        # ODS files are ZIP containers containing XML.
-        try:
-            import zipfile
-            from xml.etree import ElementTree as ET
-
-            with zipfile.ZipFile(path) as archive:
-                xml = archive.read("content.xml")
-
-            root = ET.fromstring(xml)
-            return "\n".join(
-                "".join(element.itertext())
-                for element in root.iter()
-                if element.tag.endswith("}table-row")
-            ), None
-
-        except Exception as exc:
-            return None, f"ODS error: {exc}"
+        return extract_ods(path)
 
     if ext in IMAGE_EXTENSIONS:
         if ext == ".svg":
             return read_text_file(path)
-        return None, "Image file; OCR not enabled"
+
+        if ext == ".heic":
+            return None, "HEIC image: install pillow-heif to enable OCR"
+
+        if ext in OCR_IMAGE_EXTENSIONS:
+            return ocr_image_file(path)
+
+        return None, "Image file; OCR not attempted"
 
     if ext in AUDIO_VIDEO_EXTENSIONS:
         return None, "Audio/video file; transcription not enabled"
@@ -396,14 +557,14 @@ def extract_content(path):
                     names = archive.namelist()
                 return (
                     "[Archive entries]\n" + "\n".join(names[:100]),
-                    None
+                    None,
                 )
             except Exception as exc:
                 return None, f"Archive error: {exc}"
 
         return None, "Archive detected; contents not extracted"
 
-    # Last attempt: read files that look like plain text.
+    # Última tentativa: arquivo parece texto?
     try:
         with path.open("rb") as file:
             sample = file.read(4096)
@@ -416,6 +577,10 @@ def extract_content(path):
     except Exception as exc:
         return None, f"Could not inspect file: {exc}"
 
+
+# ---------------------------------------------------------------------------
+# Utilitários de arquivo
+# ---------------------------------------------------------------------------
 
 def safe_size(path):
     try:
@@ -434,6 +599,10 @@ def format_size(size):
     return f"{size / (1024 ** 3):.2f} GB"
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     print(f"Scanning: {ROOT}")
     print("This may take a while for large folders...\n")
@@ -442,28 +611,23 @@ def main():
     files = []
     errors = []
 
-    # os.walk traverses all nested directories.
     for current, dirnames, filenames in os.walk(ROOT):
         current_path = Path(current)
 
-        # Do not follow directory symlinks; avoids loops.
         dirnames[:] = sorted(
             d for d in dirnames
             if not (current_path / d).is_symlink()
         )
 
         for dirname in sorted(dirnames):
-            directory = current_path / dirname
-            directories.append(directory)
+            directories.append(current_path / dirname)
 
         for filename in sorted(filenames):
             path = current_path / filename
 
-            # Never include the report in its own inventory.
             if path.resolve() == OUTPUT.resolve():
                 continue
 
-            # Avoid reading through file symlinks outside the folder.
             if path.is_symlink():
                 files.append((path, "SYMLINK"))
             else:
@@ -486,10 +650,9 @@ def main():
     report.append("-" * 78)
     report.append(ROOT.name + "/")
 
-    # Show every directory and file in a tree-like structure.
     all_paths = sorted(
-        directories + [path for path, _ in files],
-        key=lambda p: (str(p.parent).lower(), p.name.lower())
+        directories + [p for p, _ in files],
+        key=lambda p: (str(p.parent).lower(), p.name.lower()),
     )
 
     children = {}
@@ -499,7 +662,7 @@ def main():
     def add_tree(directory, prefix=""):
         entries = sorted(
             children.get(directory, []),
-            key=lambda p: (not p.is_dir(), p.name.lower())
+            key=lambda p: (not p.is_dir(), p.name.lower()),
         )
 
         for index, path in enumerate(entries):
@@ -510,10 +673,7 @@ def main():
             report.append(prefix + connector + path.name + suffix)
 
             if path.is_dir():
-                add_tree(
-                    path,
-                    prefix + ("    " if is_last else "│   ")
-                )
+                add_tree(path, prefix + ("    " if is_last else "│   "))
 
     add_tree(ROOT)
 
@@ -534,7 +694,9 @@ def main():
         report.append(f"Relative path: {relative}")
         report.append(f"Extension: {ext}")
         report.append(f"Size: {format_size(size)}")
-        report.append(f"Type: {mimetypes.guess_type(path.name)[0] or 'unknown'}")
+        report.append(
+            f"Type: {mimetypes.guess_type(path.name)[0] or 'unknown'}"
+        )
 
         if special == "SYMLINK":
             report.append("Status: Symbolic link; not followed")
