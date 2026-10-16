@@ -1,143 +1,581 @@
-# desktop-file-organizer
-### your Desktop is not a filing system. it is a cry for help.
+# ✦ Desktop Archaeology Toolkit ✦
 
-> Two Python scripts. One suspiciously messy Desktop. A tiny attempt to restore order to the filesystem before it achieves sentience.
+> **Two tiny Python scripts for turning a chaotic folder into something that looks like you have your life together.**
+>
+> 🗂️ inventory first → 🧠 classify → 🧹 organize → ✨ pretend it was always this way
 
-This is a small, no-dependencies Python toolkit for people who collect files like browser tabs, download things with names like `document_final_FINAL2.pdf`, and occasionally remember that folders exist.
+This repository contains two complementary utilities for **exploring, understanding, and organizing large folders** — especially a Windows Desktop that has slowly evolved into an ecosystem.
 
-It inventories the chaos first, then helps sort the loot into sensible Portuguese-named folders. Think **school-office bureaucracy meets terminal goblin**: methodical enough to make a report, unhinged enough to need one.
+They are intentionally simple, local, and boring in the best possible way.
 
-## ✨ The lore
+No cloud uploads.  
+No mysterious telemetry.  
+No "AI-powered productivity ecosystem".  
+Just Python, files, and a suspicious amount of `Path()`.
 
-The internet has enough overengineered productivity apps. This project is two scripts and a dream:
+---
 
-- **`inventario_arquivos.py`** — the forensic investigator. Recursively lists files and folders so you can see what kind of digital ecosystem you're living in.
-- **`organizar_area_trabalho.py`** — the tiny janitor with a clipboard. Previews file moves, sorts files into categories, and cleans up directories that become empty.
+## 🌸 What's inside?
 
-No cloud account. No subscription. No AI pretending that renaming `thing2_new_revised_REAL.pdf` is a spiritual journey. Just Python and your filesystem.
+### `file_inventory_maker.py`
 
-## 🧰 What it does
+The **reconnaissance girlie**.
 
-- **Recursive inventory:** makes a readable report of files and folders, including nested directories.
-- **Rule-based sorting:** uses filenames, paths, extensions, and recognizable keywords to choose destinations. It is practical heuristics, not mind-reading.
-- **Portuguese folder names:** categories are descriptive and designed to be easy to find, including school administration, Censo Escolar, attendance, math/study materials, programming projects, PDFs, spreadsheets, images, archives, and assorted digital debris.
-- **Protected zones:** the organizer is designed to leave folders whose names contain `lagora`, `censo`, or `sistema presença` (including common accent variations) alone.
-- **`shutdown.bat` gets plot armor:** files with that name are protected, along with the folders needed to keep them where they are.
-- **Preview before action:** it shows the proposed moves and requires the exact confirmation `ORGANIZAR`. Anything else cancels. No surprise speedrun.
-- **No silent overwrites:** when a destination already has a file with the same name, the organizer uses a different name instead of replacing it.
-- **CSV move log:** writes `registro_organizacao.csv` so you can inspect what moved where.
-- **Empty-folder cleanup:** removes directories only when they are empty after the moves. Files are not supposed to be deleted as part of this cleanup.
+It recursively scans the folder where the script lives and creates:
 
-## 🚀 Getting started
-
-### Requirements
-
-- Windows is the main target.
-- Python 3.10+ is recommended.
-- No third-party packages. The standard library is doing the heavy lifting, as nature intended.
-
-Check that Python is available:
-
-```powershell
-python --version
+```text
+folder_inventory.txt
 ```
 
-### 1. Put the scripts somewhere sensible
+The inventory contains:
 
-Download or clone this repository, then place the scripts in a folder you can find again. You may run them from your Desktop or a separate tools folder.
+- 🌳 the complete recursive folder tree
+- 📄 every discovered file
+- 📏 file sizes
+- 🧩 file extensions
+- 🏷️ MIME types when detectable
+- 👀 a preview of the first **5 lines** of readable content
+- 📚 text extraction from several document formats
+- 🔍 OCR for supported images
+- 📑 OCR fallback for scanned PDFs
+- ⚠️ notes about unsupported or unreadable files
+- 🔗 detection of symbolic links without following them
 
-```powershell
-git clone https://github.com/YOUR-USERNAME/desktop-file-organizer.git
-cd desktop-file-organizer
+It supports text files, PDFs, DOC/DOCX, spreadsheets, presentations, OpenDocument formats, images, archives, and various other file types.
+
+For example, it can turn:
+
+```text
+Desktop/
+├── coisas/
+│   ├── trabalho_final.pdf
+│   ├── planilha.xlsx
+│   └── imagem.png
+├── Downloads/
+│   └── definitivamente_importante.docx
+└── ?????/
+    └── arquivo_que_eu_nao_lembro_o_que_e.txt
 ```
 
-Replace `YOUR-USERNAME` with your GitHub username, and make sure the inventory script's actual filename matches the command below.
+into a much more useful inventory containing metadata **and tiny previews of what those files actually contain**.
 
-### 2. Take inventory before touching anything
+The generated report is deliberately limited to the first few lines of each file so your computer doesn't spend three business days attempting to philosophically understand a 400 MB text dump.
 
-```powershell
-python inventario_arquivos.py
+The script also skips files larger than **50 MB** and never follows symbolic links. 
+
+---
+
+### `organizar_area_trabalho.py`
+
+The **organizational fairy with a clipboard**.
+
+This script takes a folder — by default, your Windows Desktop — and classifies files based on their **names, paths, extensions, and keywords**, moving them into sensible category folders.
+
+Some of its categories include:
+
+```text
+Escola - Secretaria
+Escola - Frequência e Presença
+Escola - Atas e Resultados
+Escola - Censo Escolar
+Escola - Alunos e Responsáveis
+Escola - Atestados e Declarações
+Escola - Inclusão e Atendimento
+Escola - Passeios e Autorizações
+Escola - Biblioteca e Livros
+Escola - Financeiro e Prestação de Contas
+
+Estudos - Faculdade e Matemática
+Programação e Projetos
+
+Programas - Instaladores e Sistemas
+Imagens e Fotografias
+Áudio e Vídeo
+Arquivos Compactados
+Documentos Gerais
+Documentos - PDFs
+Documentos - Word e Texto
+Planilhas e Dados
+Dados e Páginas Web
+Temporários e Arquivos Auxiliares
+Ferramentas de Organização
 ```
 
-Read the script's prompts and output path; the exact output filename depends on the inventory script version you're using. Treat the inventory like a pre-flight checklist: inspect the terrain before launching the file-moving machinery.
+And, importantly, it **doesn't just start throwing your files around immediately**.
 
-### 3. Preview the reorganization
+It first creates a proposed organization plan and shows you examples:
 
-```powershell
-python organizar_area_trabalho.py
+```text
+arquivo_importante.pdf
+    -> Documentos - PDFs/arquivo_importante.pdf
+
+planilha_faltas.xlsx
+    -> Escola - Frequência e Presença/planilha_faltas.xlsx
 ```
 
-The organizer attempts to detect your Desktop, including common localized and OneDrive paths. It should show a preview of the planned moves before changing anything.
-
-Read it. Actually read it. This is the part where you get to be smarter than a raccoon with administrator privileges.
-
-If the plan looks right, type:
+Then it asks you to type:
 
 ```text
 ORGANIZAR
 ```
 
-Anything else cancels the operation.
-
-Afterward, inspect `registro_organizacao.csv` to see the recorded moves.
-
-## 🛡️ Protected items: plot armor edition
-
-The organizer is intended to leave these items untouched:
-
-| Item | Protection |
-|---|---|
-| Any folder whose name contains `lagora` | The folder and its contents are skipped |
-| Any folder whose name contains `censo` | The folder and its contents are skipped |
-| Any folder whose name contains `sistema presença` | The folder and its contents are skipped, including common accent variations |
-| Any file named `shutdown.bat` | The file is skipped, and its containing folder is preserved as needed |
-
-The inventory script may still list protected items because its job is to report what exists. The protections above apply to the organizer.
-
-**Important:** protection is based on names and paths, not on understanding what an application is. If a folder is mission-critical, check that its name matches the protection rules and verify the preview.
-
-## 🗂️ How the sorting brain works
-
-The organizer uses keyword and extension rules to make educated guesses. A file about school attendance may land in a school-related folder; a `.pdf` with no stronger clue may land in a general PDF folder.
-
-This is not semantic AI. It cannot reliably understand every cryptic filename, weird extension, or file whose entire identity is `new_new2`. Check the preview and manually fix any questionable placements.
-
-## ⚠️ Safety briefing from the goblin union
-
-Moving files can break shortcuts, scripts, project references, or apps that expect files to stay in their original locations.
-
-Before running the organizer:
-
-1. **Back up important files.** This is not optional wisdom; it is the ancient law of computers.
-2. Generate and review the inventory.
-3. Run the organizer and inspect the preview.
-4. Cancel if anything looks wrong.
-5. After organizing, verify important projects and inspect the CSV log.
-
-A CSV log is an audit trail, **not an automatic undo button**. The script is intended to move files, not delete their contents, but don't treat any bulk file operation as risk-free.
-
-## 🧪 Suggested workflow
+If you type literally anything else:
 
 ```text
-inventory → inspect the chaos → preview the moves → confirm → audit the log
+✨ nothing happens ✨
 ```
 
-In other words: measure twice, yeet once.
-
-## 🛠️ Customization
-
-Want different folder categories? Edit the organizer's keyword and extension rules. Want different protected folders? Update its protection checks and test the preview before using it on real files.
-
-If you improve the classification rules, make them readable. Future-you is a separate person with no memory of why you added a mysterious condition at 2:17 a.m.
-
-## 🤝 Contributions
-
-Bug reports, clearer category rules, better filename handling, and safety improvements are welcome. Keep changes boring where data safety is concerned and silly where documentation is concerned.
-
-## 📜 License
-
-No license has been selected yet. Add a `LICENSE` file before presenting this repository as open source; without one, others do not automatically receive permission to reuse, modify, or redistribute the code.
+The script cancels without moving anything.
 
 ---
 
-*Made for the noble quest of turning Desktop entropy into folders. The files were always there. They were simply choosing violence.*
+# 🛡️ Safety First
+
+The organizer was designed with the assumption that **your files are more important than the script's desire to be clever**.
+
+### It does NOT overwrite files
+
+If the destination already contains a file with the same name:
+
+```text
+relatorio.pdf
+relatorio (2).pdf
+relatorio (3).pdf
+...
+```
+
+are created instead.
+
+No silent replacement. No `oopsies`.
+
+### Protected folders stay protected
+
+Anything containing terms associated with:
+
+```text
+lagora
+censo
+presença
+presenca
+```
+
+is protected from organization.
+
+The protection applies to paths inside the target folder, including their contents. 
+
+### `shutdown.bat` is sacred
+
+Any file named:
+
+```text
+shutdown.bat
+```
+
+is never moved.
+
+Its necessary parent folders are preserved as well.
+
+Because sometimes there is a tiny batch file somewhere that you absolutely, definitely, remember the purpose of.
+
+Probably.
+
+Maybe.
+
+Anyway: **it stays.**
+
+### It doesn't delete files
+
+The organizer only removes directories that have become completely empty after organization.
+
+Files themselves are never deleted by the cleanup process.
+
+### It creates an audit trail
+
+After organization, a CSV named:
+
+```text
+registro_organizacao.csv
+```
+
+records:
+
+- date/time
+- original location
+- destination
+- status
+- error details, if applicable
+
+So you can actually inspect what happened instead of staring at your newly organized Desktop wondering what the hell just occurred.
+
+---
+
+# 💻 Installation
+
+## Python
+
+You need **Python 3**.
+
+Check:
+
+```bash
+python --version
+```
+
+or on some systems:
+
+```bash
+python3 --version
+```
+
+---
+
+## 📦 Install all Python dependencies at once
+
+The organizer itself uses only Python's standard library, so **it requires no third-party packages**.
+
+The inventory generator has optional format/OCR support.
+
+If you want the **full feature set**, install everything in one command:
+
+```bash
+pip install pymupdf python-docx openpyxl xlrd python-pptx odfpy pytesseract Pillow
+```
+
+That's the entire Python dependency collection in one ✨ command ✨.
+
+The packages correspond roughly to:
+
+| Package | Used for |
+|---|---|
+| `pymupdf` | PDF reading + PDF rendering for OCR |
+| `python-docx` | `.docx` files |
+| `openpyxl` | `.xlsx` / `.xlsm` files |
+| `xlrd` | legacy `.xls` files |
+| `python-pptx` | `.pptx` presentations |
+| `odfpy` | `.odt` / `.odp` files |
+| `pytesseract` | OCR |
+| `Pillow` | image handling / OCR |
+
+The inventory script itself documents these dependencies and separates the OCR requirements from the other Python packages.
+
+---
+
+# 👁️ OCR Setup
+
+Python packages aren't enough for OCR.
+
+`pytesseract` is basically a Python translator for the actual **Tesseract OCR engine**, so Tesseract itself needs to be installed too.
+
+You also want the Portuguese language data if you're dealing with Brazilian documents.
+
+### Windows
+
+Install Tesseract from:
+
+https://github.com/UB-Mannheim/tesseract/wiki
+
+Make sure the Tesseract executable is available through your `PATH`.
+
+### Linux
+
+```bash
+sudo apt install tesseract-ocr tesseract-ocr-por
+```
+
+### macOS
+
+```bash
+brew install tesseract tesseract-lang
+```
+
+The inventory script attempts OCR using:
+
+```text
+por+eng
+por
+eng
+```
+
+in that order, so Portuguese documents get the VIP treatment when the language pack is available.
+
+---
+
+# 🚀 Usage
+
+## 1. Make an inventory
+
+Put:
+
+```text
+file_inventory_maker.py
+```
+
+inside the folder you want to inspect.
+
+Then run:
+
+```bash
+python file_inventory_maker.py
+```
+
+It will generate:
+
+```text
+folder_inventory.txt
+```
+
+in the same directory.
+
+The script automatically treats its own directory as the root folder. 
+
+---
+
+## 2. Organize the folder
+
+Run:
+
+```bash
+python organizar_area_trabalho.py
+```
+
+You can also explicitly provide a folder:
+
+```bash
+python organizar_area_trabalho.py "C:/Users/you/Desktop"
+```
+
+If you don't provide a path, it attempts to find the Windows Desktop automatically, including common OneDrive locations.
+
+The recommended workflow is:
+
+```text
+                    ┌────────────────────┐
+                    │   CHAOS DIRECTORY  │
+                    │   847 files ???    │
+                    └─────────┬──────────┘
+                              │
+                              ▼
+                    file_inventory_maker
+                              │
+                              ▼
+                    folder_inventory.txt
+                              │
+                    👀 inspect reality
+                              │
+                              ▼
+                  organizar_area_trabalho
+                              │
+                              ▼
+                    safety simulation
+                              │
+                              ▼
+                    type ORGANIZAR
+                              │
+                              ▼
+                    ✨ organized files ✨
+```
+
+---
+
+# 🧠 Why use both?
+
+Because blindly organizing a giant folder is a little like performing surgery after looking at the patient for approximately 0.4 seconds.
+
+The inventory tool gives you **situational awareness first**.
+
+The organizer then performs a rule-based cleanup.
+
+That means you can do:
+
+```text
+1. Scan
+2. Inspect
+3. Decide
+4. Organize
+5. Check the CSV
+```
+
+instead of:
+
+```text
+1. RUN SCRIPT
+2. 😨
+3. "WHERE DID MY FILES GO"
+```
+
+---
+
+# 🎀 Design Philosophy
+
+This project follows a very specific engineering philosophy:
+
+### ✦ Local
+
+Your files stay on your machine.
+
+### ✦ Deterministic
+
+Classification is based on explicit rules, keywords, paths, and extensions.
+
+No mysterious machine-learning oracle is deciding that `document_final_FINAL2.pdf` is "probably spiritually related to mathematics."
+
+### ✦ Reversible-ish
+
+Files are moved rather than deleted, collisions are handled safely, and an operation log is produced.
+
+### ✦ Paranoid
+
+Protected paths are deliberately excluded.
+
+`shutdown.bat` gets diplomatic immunity.
+
+### ✦ Practical
+
+The scripts are intended for real folders with real accumulated junk, not immaculate example directories containing:
+
+```text
+hello.txt
+world.py
+nice_folder/
+```
+
+---
+
+# 🧪 Supported Content
+
+The inventory generator understands a surprisingly large amount of file-world nonsense.
+
+### Text
+
+```text
+.txt .md .rst .log .ini .cfg .conf
+.toml .yaml .yml .xml .html .css
+.js .ts .py .java .c .cpp .cs
+.go .rs .php .rb .sh .bat .cmd
+.sql .tex .env .gitignore ...
+```
+
+### Documents
+
+```text
+.pdf
+.doc
+.docx
+.odt
+```
+
+### Spreadsheets
+
+```text
+.xlsx
+.xlsm
+.xls
+.ods
+.csv
+```
+
+### Presentations
+
+```text
+.pptx
+.odp
+```
+
+### Images
+
+```text
+.png
+.jpg
+.jpeg
+.gif
+.bmp
+.webp
+.tif
+.tiff
+.ico
+.heic
+.svg
+```
+
+Some image formats can be passed through OCR.
+
+### Archives
+
+```text
+.zip
+.rar
+.7z
+.tar
+.gz
+.bz2
+.xz
+```
+
+ZIP files have their entries listed, while other archive formats are detected but not extracted.
+
+Audio and video are detected but **not transcribed**. 
+
+---
+
+# 📁 Output Files
+
+After running the tools, you may see:
+
+```text
+folder_inventory.txt
+```
+
+A human-readable recursive inventory.
+
+and:
+
+```text
+registro_organizacao.csv
+```
+
+A machine-readable record of the organizer's movements.
+
+These are intentionally boring names.
+
+Boring filenames are good filenames.
+
+---
+
+# 💅 TL;DR
+
+Install the full inventory stack:
+
+```bash
+pip install pymupdf python-docx openpyxl xlrd python-pptx odfpy pytesseract Pillow
+```
+
+Then:
+
+```bash
+python file_inventory_maker.py
+```
+
+to **understand the chaos**.
+
+And:
+
+```bash
+python organizar_area_trabalho.py
+```
+
+to **make the chaos develop a filing system**.
+
+---
+
+## ✦ Final status
+
+```text
+Files:        everywhere
+Organization: questionable
+Python:       available
+Fear:         unnecessary
+Backup:       still recommended
+Aesthetic:    immaculate
+```
+
+**May your folders be recursive, your paths relative, and your `shutdown.bat` forever undisturbed.** 🌷🐍💾
